@@ -22,7 +22,7 @@ class SelectiveScanFn(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
-                return_last_state=False, ssm_initial_state=None):
+                return_last_state=False, ssm_initial_state=None, length=None):
         if u.stride(-1) != 1:
             u = u.contiguous()
         if delta.stride(-1) != 1:
@@ -41,26 +41,25 @@ class SelectiveScanFn(torch.autograd.Function):
         if C.dim() == 3:
             C = rearrange(C, "b dstate l -> b 1 dstate l")
             ctx.squeeze_C = True
-        out, x, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus, ssm_initial_state)
+        out, x, last_state, *rest = selective_scan_cuda.fwd(u, delta, A, B, C, D, z, delta_bias, delta_softplus, ssm_initial_state, length)
         ctx.delta_softplus = delta_softplus
         ctx.has_z = z is not None
-        last_state = x[:, :, -1, 1::2]  # (batch, dim, dstate)
         if not ctx.has_z:
-            ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x, ssm_initial_state)
+            ctx.save_for_backward(u, delta, A, B, C, D, delta_bias, x, ssm_initial_state, length)
             return out, last_state
         else:
-            ctx.save_for_backward(u, delta, A, B, C, D, z, delta_bias, x, ssm_initial_state, out)
+            ctx.save_for_backward(u, delta, A, B, C, D, z, delta_bias, x, ssm_initial_state, length, out)
             out_z = rest[0]
             return out_z, last_state
 
     @staticmethod
     def backward(ctx, dout, dlast_state):
         if not ctx.has_z:
-            u, delta, A, B, C, D, delta_bias, x, ssm_initial_state = ctx.saved_tensors
+            u, delta, A, B, C, D, delta_bias, x, ssm_initial_state, length = ctx.saved_tensors
             z = None
             out = None
         else:
-            u, delta, A, B, C, D, z, delta_bias, x, ssm_initial_state, out = ctx.saved_tensors
+            u, delta, A, B, C, D, z, delta_bias, x, ssm_initial_state, length, out = ctx.saved_tensors
         if dout.stride(-1) != 1:
             dout = dout.contiguous()
         # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
@@ -68,7 +67,7 @@ class SelectiveScanFn(torch.autograd.Function):
         # Here we just pass in None and dz will be allocated in the C++ code.
         du, ddelta, dA, dB, dC, dD, ddelta_bias, dssm_initial_state, *rest = selective_scan_cuda.bwd(
             u, delta, A, B, C, D, z, delta_bias, dout, x, out, None, ctx.delta_softplus,
-            False, ssm_initial_state, dlast_state  # option to recompute out_z, not used here
+            False, ssm_initial_state, dlast_state, length  # option to recompute out_z, not used here
         )
         dz = rest[0] if ctx.has_z else None
         dB = dB.squeeze(1) if getattr(ctx, "squeeze_B", False) else dB
@@ -79,7 +78,7 @@ class SelectiveScanFn(torch.autograd.Function):
                 ddelta_bias if delta_bias is not None else None,
                 None,
                 None,
-                dssm_initial_state if ssm_initial_state is not None else None)
+                dssm_initial_state if ssm_initial_state is not None else None, None)
 
 
 def rms_norm_forward(
@@ -103,12 +102,12 @@ def rms_norm_forward(
 
 
 def selective_scan_fn(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
-                     return_last_state=False, ssm_initial_state=None):
+                     return_last_state=False, ssm_initial_state=None, length=None):
     """if return_last_state is True, returns (out, last_state)
     last_state has shape (batch, dim, dstate). Note that the gradient of the last state is
     not considered in the backward pass.
     """
-    return SelectiveScanFn.apply(u, delta, A, B, C, D, z, delta_bias, delta_softplus, return_last_state, ssm_initial_state)
+    return SelectiveScanFn.apply(u, delta, A, B, C, D, z, delta_bias, delta_softplus, return_last_state, ssm_initial_state, length)
 
 
 def selective_scan_ref(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,

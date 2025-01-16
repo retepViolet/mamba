@@ -83,7 +83,10 @@ void set_ssm_params_fwd(SSMParamsBase &params,
                         void* ssm_initial_state_ptr,
                         const uint32_t ssm_initial_state_batch_stride,
                         const uint32_t ssm_initial_state_d_stride,
-                        const uint32_t ssm_initial_state_dstate_stride) {  // retep is here
+                        const uint32_t ssm_initial_state_dstate_stride,
+                        const at::Tensor last_state,
+                        void* length_ptr,
+                        const uint32_t length_batch_stride) {  // retep is here
 
     // Reset the parameters
     memset(&params, 0, sizeof(params));
@@ -118,6 +121,12 @@ void set_ssm_params_fwd(SSMParamsBase &params,
     params.ssm_initial_state_batch_stride = ssm_initial_state_batch_stride;
     params.ssm_initial_state_d_stride = ssm_initial_state_d_stride;
     params.ssm_initial_state_dstate_stride = ssm_initial_state_dstate_stride;
+    params.last_state_ptr = last_state.data_ptr();
+    params.last_state_batch_stride = last_state.stride(0);
+    params.last_state_d_stride = last_state.stride(1);
+    params.last_state_dstate_stride = last_state.stride(2);
+    params.length_batch_stride = length_batch_stride;
+    params.length_ptr = length_ptr;
     // All stride are in elements, not bytes.
     params.A_d_stride = A.stride(0);
     params.A_dstate_stride = A.stride(1);
@@ -192,10 +201,10 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                         const uint32_t dssm_initial_state_batch_stride,
                         const uint32_t dssm_initial_state_d_stride,
                         const uint32_t dssm_initial_state_dstate_stride,
-                        void* dssm_last_state_ptr,
-                        const uint32_t dssm_last_state_batch_stride,
-                        const uint32_t dssm_last_state_d_stride,
-                        const uint32_t dssm_last_state_dstate_stride) {
+                        const at::Tensor last_state,
+                        const at::Tensor dlast_state,
+                        void* length_ptr,
+                        const uint32_t length_batch_stride) {
     // Pass in "dout" instead of "out", we're not gonna use "out" unless we have z
     set_ssm_params_fwd(params, batch, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
                        u, delta, A, B, C, has_z ? out : dout,
@@ -207,7 +216,8 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
                        ssm_initial_state_ptr,
                        ssm_initial_state_batch_stride,
                        ssm_initial_state_d_stride,
-                       ssm_initial_state_dstate_stride); // retep is here
+                       ssm_initial_state_dstate_stride,
+                       last_state, length_ptr, length_batch_stride); // retep is here
     if (!recompute_out_z) { params.out_z_ptr = nullptr; }
 
     // Set the pointers and strides.
@@ -225,10 +235,10 @@ void set_ssm_params_bwd(SSMParamsBwd &params,
     params.dssm_initial_state_batch_stride = dssm_initial_state_batch_stride;
     params.dssm_initial_state_d_stride = dssm_initial_state_d_stride;
     params.dssm_initial_state_dstate_stride = dssm_initial_state_dstate_stride;
-    params.dssm_last_state_ptr = dssm_last_state_ptr;
-    params.dssm_last_state_batch_stride = dssm_last_state_batch_stride;
-    params.dssm_last_state_d_stride = dssm_last_state_d_stride;
-    params.dssm_last_state_dstate_stride = dssm_last_state_dstate_stride;
+    params.dlast_state_ptr = dlast_state.data_ptr();
+    params.dlast_state_batch_stride = dlast_state.stride(0);
+    params.dlast_state_d_stride = dlast_state.stride(1);
+    params.dlast_state_dstate_stride = dlast_state.stride(2);
     // All stride are in elements, not bytes.
     params.dout_batch_stride = dout.stride(0);
     params.dout_d_stride = dout.stride(1);
@@ -264,7 +274,8 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
                   const c10::optional<at::Tensor> &D_,
                   const c10::optional<at::Tensor> &z_,
                   const c10::optional<at::Tensor> &delta_bias_,
-                  bool delta_softplus, const c10::optional<at::Tensor> &ssm_initial_state_) {  // retep is here
+                  bool delta_softplus, const c10::optional<at::Tensor> &ssm_initial_state_,
+                  const c10::optional<at::Tensor> &length_) {  // retep is here
     auto input_type = u.scalar_type();
     auto weight_type = A.scalar_type();
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
@@ -333,6 +344,15 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
         ssm_initial_state_d_stride = ssm_initial_state.stride(1);
         ssm_initial_state_dstate_stride = ssm_initial_state.stride(2);
     }
+    uint32_t length_batch_stride = 0;
+    if (length_.has_value()) {
+        auto length = length_.value();
+        TORCH_CHECK(length.scalar_type() == at::ScalarType::Int || length.scalar_type()==at::ScalarType::Long);
+        TORCH_CHECK(length.is_cuda());
+        CHECK_SHAPE(length, batch_size);
+        length_batch_stride = length.stride(0);
+    }
+    at::Tensor last_state = torch::empty({batch_size, dim, dstate}, u.options().dtype(weight_type));
 
     if (delta_bias_.has_value()) {
         auto delta_bias = delta_bias_.value();
@@ -371,7 +391,10 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
                        ssm_initial_state_.has_value() ? ssm_initial_state_.value().data_ptr() : nullptr,
                        ssm_initial_state_batch_stride,
                        ssm_initial_state_d_stride,
-                       ssm_initial_state_dstate_stride); // retep is here
+                       ssm_initial_state_dstate_stride,
+                       last_state,
+                       length_.has_value()? length_.value().data_ptr() : nullptr,
+                       length_batch_stride); // retep is here
 
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing
@@ -383,7 +406,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     //         selective_scan_fwd_cuda<input_t, weight_t>(params, stream);
     //     });
     // });
-    std::vector<at::Tensor> result = {out, x};
+    std::vector<at::Tensor> result = {out, x, last_state};
     if (has_z) { result.push_back(out_z); }
     return result;
 }
@@ -401,7 +424,8 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                   bool delta_softplus,
                   bool recompute_out_z,
                   const c10::optional<at::Tensor> &ssm_initial_state_,
-                  const c10::optional<at::Tensor> &dssm_last_state_) {  // retep is here
+                  const at::Tensor &dlast_state,
+                  const c10::optional<at::Tensor> &length_) {  // retep is here
     auto input_type = u.scalar_type();
     auto weight_type = A.scalar_type();
     TORCH_CHECK(input_type == at::ScalarType::Float || input_type == at::ScalarType::Half || input_type == at::ScalarType::BFloat16);
@@ -462,17 +486,16 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     }
 
     // retep is here
-    uint32_t dssm_last_state_batch_stride = 0;
-    uint32_t dssm_last_state_d_stride = 0;
-    uint32_t dssm_last_state_dstate_stride = 0;
-    if (dssm_last_state_.has_value()) {
-        auto dssm_last_state = dssm_last_state_.value();
-        TORCH_CHECK(dssm_last_state.scalar_type() == input_type);
-        TORCH_CHECK(dssm_last_state.is_cuda());
-        CHECK_SHAPE(dssm_last_state, batch_size, dim, dstate);
-        dssm_last_state_batch_stride = dssm_last_state.stride(0);
-        dssm_last_state_d_stride = dssm_last_state.stride(1);
-        dssm_last_state_dstate_stride = dssm_last_state.stride(2);
+    TORCH_CHECK(dlast_state.scalar_type() == input_type);
+    TORCH_CHECK(dlast_state.is_cuda());
+    CHECK_SHAPE(dlast_state, batch_size, dim, dstate);
+    uint32_t length_batch_stride = 0;
+    if (length_.has_value()) {
+        auto length = length_.value();
+        TORCH_CHECK(length.scalar_type() == at::ScalarType::Int || length.scalar_type()==at::ScalarType::Long);
+        TORCH_CHECK(length.is_cuda());
+        CHECK_SHAPE(length, batch_size);
+        length_batch_stride = length.stride(0);
     }
 
     uint32_t ssm_initial_state_batch_stride = 0;
@@ -557,6 +580,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
         dssm_initial_state_d_stride = dssm_initial_state.stride(1);
         dssm_initial_state_dstate_stride = dssm_initial_state.stride(2);
     }
+    at::Tensor last_state = torch::empty({batch_size, dim, dstate}, u.options().dtype(weight_type));
 
     SSMParamsBwd params;
     set_ssm_params_bwd(params, batch_size, dim, seqlen, dstate, n_groups, n_chunks, is_variable_B, is_variable_C,
@@ -572,8 +596,9 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
                        ssm_initial_state_.has_value() ? dssm_initial_state.data_ptr() : nullptr,
                        ssm_initial_state_batch_stride, ssm_initial_state_d_stride, ssm_initial_state_dstate_stride,
                        dssm_initial_state_batch_stride, dssm_initial_state_d_stride, dssm_initial_state_dstate_stride,
-                       dssm_last_state_.has_value() ? dssm_last_state_.value().data_ptr() : nullptr,
-                       dssm_last_state_batch_stride, dssm_last_state_d_stride, dssm_last_state_dstate_stride); // retep is here
+                       last_state, dlast_state,
+                       length_.has_value() ? length_.value().data_ptr() : nullptr,
+                       length_batch_stride); // retep is here
 
     // Otherwise the kernel will be launched from cuda:0 device
     // Cast to char to avoid compiler warning about narrowing

@@ -118,6 +118,14 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
         ssm_initial_state = reinterpret_cast<input_t *>(params.ssm_initial_state_ptr) + batch_id * params.ssm_initial_state_batch_stride
             + dim_id * kNRows * params.ssm_initial_state_d_stride;
     }
+    // 读取 length：
+    input_t* last_state = reinterpret_cast<input_t *>(params.last_state_ptr) + batch_id * params.last_state_batch_stride
+                                                    + dim_id * kNRows  * params.last_state_d_stride;
+    uint32_t length_val = params.seqlen;
+    if (params.length_ptr != nullptr){
+        uint32_t *length_ptr = reinterpret_cast<uint32_t *>(params.length_ptr) + batch_id * params.length_batch_stride;
+        length_val = *length_ptr;
+    }
 
     float D_val[kNRows] = {0};
     if (params.D_ptr != nullptr) {
@@ -231,6 +239,13 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                                 thread_data[i] = make_float2(1.f, 0.f);
                             }
                         }
+                        if(chunk == 0 && i == 0 && threadIdx.x == 0 && ssm_initial_state != nullptr){
+                            input_t ssm_init_val = ssm_initial_state[
+                                state_idx * params.ssm_initial_state_dstate_stride +
+                                r * params.ssm_initial_state_d_stride
+                            ];
+                            thread_data[0].y += thread_data[0].x * ssm_init_val;
+                        }
                     } else {
                         // Pytorch's implementation of complex exp (which calls thrust) is very slow
                         complex_t delta_a_exp = cexp2f(delta_vals[r][i] * A_val[r]);
@@ -265,6 +280,11 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                 }
                 #pragma unroll
                 for (int i = 0; i < kNItems; ++i) {
+                    int global_pos = chunk * kChunkSize + (threadIdx.x * kNItems + i);
+                    if (global_pos < params.seqlen && global_pos > 0 && global_pos == (length_val - 1)) {
+                        last_state[state_idx * params.last_state_dstate_stride +
+                                    r * params.last_state_d_stride] = thread_data[i].y;
+                    }
                     const weight_t C_val = !kIsVariableC
                         ? BC_val[r]
                         : (!kIsVariableB ? BC_val[r] * C_vals[i] : C_vals[i]);

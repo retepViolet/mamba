@@ -113,6 +113,7 @@ class MambaMixer(modeling_mamba.MambaMixer):
                     delta_softplus=True,
                     return_last_state=True,
                     ssm_initial_state = inputs_ssm_states,
+                    length = None if attention_mask is None else torch.sum(attention_mask, dim=-1, dtype=torch.long)
                 )
                 if ssm_state is not None and cache_params is not None:
                     cache_params.update_ssm_state(self.layer_idx, ssm_state)

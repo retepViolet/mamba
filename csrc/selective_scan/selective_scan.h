@@ -57,6 +57,10 @@ struct SSMParamsBase {
     index_t ssm_initial_state_batch_stride;
     index_t ssm_initial_state_d_stride;
     index_t ssm_initial_state_dstate_stride;
+    index_t last_state_batch_stride;
+    index_t last_state_d_stride;
+    index_t last_state_dstate_stride;
+    index_t length_batch_stride;
 
     // Common data pointers.
     void *__restrict__ A_ptr;
@@ -73,6 +77,8 @@ struct SSMParamsBase {
 
     // retep is here
     void *__restrict__ ssm_initial_state_ptr;
+    void *__restrict__ length_ptr;
+    void *__restrict__ last_state_ptr;
 };
 
 struct SSMParamsBwd: public SSMParamsBase {
@@ -98,9 +104,9 @@ struct SSMParamsBwd: public SSMParamsBase {
     index_t dssm_initial_state_batch_stride;
     index_t dssm_initial_state_d_stride;
     index_t dssm_initial_state_dstate_stride;
-    index_t dssm_last_state_batch_stride;
-    index_t dssm_last_state_d_stride;
-    index_t dssm_last_state_dstate_stride;
+    index_t dlast_state_batch_stride;
+    index_t dlast_state_d_stride;
+    index_t dlast_state_dstate_stride;
 
     // Common data pointers.
     void *__restrict__ dout_ptr;
@@ -115,5 +121,5 @@ struct SSMParamsBwd: public SSMParamsBase {
 
     // retep is here
     void *__restrict__ dssm_initial_state_ptr;
-    void *__restrict__ dssm_last_state_ptr;
+    void *__restrict__ dlast_state_ptr;
 };

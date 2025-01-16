@@ -6,3 +6,4 @@ build/
 *_hip.*
 .tmp.driveupload
 .tmp.drivedownload
+.vscode
