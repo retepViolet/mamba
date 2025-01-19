@@ -78,7 +78,8 @@ class SelectiveScanFn(torch.autograd.Function):
                 ddelta_bias if delta_bias is not None else None,
                 None,
                 None,
-                dssm_initial_state if ssm_initial_state is not None else None, None)
+                dssm_initial_state if ssm_initial_state is not None else None, 
+                None)
 
 
 def rms_norm_forward(

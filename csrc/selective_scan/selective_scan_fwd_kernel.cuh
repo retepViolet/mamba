@@ -113,17 +113,16 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
     input_t *Cvar = reinterpret_cast<input_t *>(params.C_ptr) + batch_id * params.C_batch_stride + group_id * params.C_group_stride;
     scan_t *x = reinterpret_cast<scan_t *>(params.x_ptr) + (batch_id * params.dim + dim_id * kNRows) * params.n_chunks * params.dstate;
     //retep is here
-    input_t *ssm_initial_state = nullptr;
+    weight_t *ssm_initial_state = nullptr;
     if (params.ssm_initial_state_ptr != nullptr){
-        ssm_initial_state = reinterpret_cast<input_t *>(params.ssm_initial_state_ptr) + batch_id * params.ssm_initial_state_batch_stride
+        ssm_initial_state = reinterpret_cast<weight_t *>(params.ssm_initial_state_ptr) + batch_id * params.ssm_initial_state_batch_stride
             + dim_id * kNRows * params.ssm_initial_state_d_stride;
     }
-    // 读取 length：
-    input_t* last_state = reinterpret_cast<input_t *>(params.last_state_ptr) + batch_id * params.last_state_batch_stride
+    weight_t* last_state = reinterpret_cast<weight_t *>(params.last_state_ptr) + batch_id * params.last_state_batch_stride
                                                     + dim_id * kNRows  * params.last_state_d_stride;
-    uint32_t length_val = params.seqlen;
+    int64_t length_val = params.seqlen;
     if (params.length_ptr != nullptr){
-        uint32_t *length_ptr = reinterpret_cast<uint32_t *>(params.length_ptr) + batch_id * params.length_batch_stride;
+        int64_t *length_ptr = reinterpret_cast<int64_t *>(params.length_ptr) + batch_id * params.length_batch_stride;
         length_val = *length_ptr;
     }
 
@@ -239,13 +238,6 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                                 thread_data[i] = make_float2(1.f, 0.f);
                             }
                         }
-                        if(chunk == 0 && i == 0 && threadIdx.x == 0 && ssm_initial_state != nullptr){
-                            input_t ssm_init_val = ssm_initial_state[
-                                state_idx * params.ssm_initial_state_dstate_stride +
-                                r * params.ssm_initial_state_d_stride
-                            ];
-                            thread_data[0].y += thread_data[0].x * ssm_init_val;
-                        }
                     } else {
                         // Pytorch's implementation of complex exp (which calls thrust) is very slow
                         complex_t delta_a_exp = cexp2f(delta_vals[r][i] * A_val[r]);
@@ -256,6 +248,16 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                                 thread_data[i] = make_float4(1.f, 0.f, 0.f, 0.f);
                             }
                         }
+                    }
+                }
+                // retep is here
+                if constexpr (!kIsComplex) {
+                    if(chunk == 0 && threadIdx.x == 0 && ssm_initial_state != nullptr){
+                        weight_t ssm_init_val = ssm_initial_state[
+                            state_idx * params.ssm_initial_state_dstate_stride +
+                            r * params.ssm_initial_state_d_stride
+                        ];
+                        thread_data[0].y += thread_data[0].x * ssm_init_val;
                     }
                 }
                 // Initialize running total
@@ -280,8 +282,8 @@ void selective_scan_fwd_kernel(SSMParamsBase params) {
                 }
                 #pragma unroll
                 for (int i = 0; i < kNItems; ++i) {
-                    int global_pos = chunk * kChunkSize + (threadIdx.x * kNItems + i);
-                    if (global_pos < params.seqlen && global_pos > 0 && global_pos == (length_val - 1)) {
+                    // retep is here
+                    if (chunk * kChunkSize + threadIdx.x * kNItems + i == length_val - 1) {
                         last_state[state_idx * params.last_state_dstate_stride +
                                     r * params.last_state_d_stride] = thread_data[i].y;
                     }

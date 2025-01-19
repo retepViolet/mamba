@@ -337,7 +337,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     uint32_t ssm_initial_state_dstate_stride = 0;
     if (ssm_initial_state_.has_value()) {
         auto ssm_initial_state = ssm_initial_state_.value();
-        TORCH_CHECK(ssm_initial_state.scalar_type() == input_type);
+        TORCH_CHECK(ssm_initial_state.scalar_type() == weight_type);
         TORCH_CHECK(ssm_initial_state.is_cuda());
         CHECK_SHAPE(ssm_initial_state, batch_size, dim, dstate);
         ssm_initial_state_batch_stride = ssm_initial_state.stride(0);
@@ -347,7 +347,7 @@ selective_scan_fwd(const at::Tensor &u, const at::Tensor &delta,
     uint32_t length_batch_stride = 0;
     if (length_.has_value()) {
         auto length = length_.value();
-        TORCH_CHECK(length.scalar_type() == at::ScalarType::Int || length.scalar_type()==at::ScalarType::Long);
+        TORCH_CHECK(length.scalar_type()==at::ScalarType::Long);
         TORCH_CHECK(length.is_cuda());
         CHECK_SHAPE(length, batch_size);
         length_batch_stride = length.stride(0);
@@ -486,13 +486,13 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     }
 
     // retep is here
-    TORCH_CHECK(dlast_state.scalar_type() == input_type);
+    TORCH_CHECK(dlast_state.scalar_type() == weight_type);
     TORCH_CHECK(dlast_state.is_cuda());
     CHECK_SHAPE(dlast_state, batch_size, dim, dstate);
     uint32_t length_batch_stride = 0;
     if (length_.has_value()) {
         auto length = length_.value();
-        TORCH_CHECK(length.scalar_type() == at::ScalarType::Int || length.scalar_type()==at::ScalarType::Long);
+        TORCH_CHECK(length.scalar_type()==at::ScalarType::Long);
         TORCH_CHECK(length.is_cuda());
         CHECK_SHAPE(length, batch_size);
         length_batch_stride = length.stride(0);
@@ -503,7 +503,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     uint32_t ssm_initial_state_dstate_stride = 0;
     if (ssm_initial_state_.has_value()) {
         auto ssm_initial_state = ssm_initial_state_.value();
-        TORCH_CHECK(ssm_initial_state.scalar_type() == input_type);
+        TORCH_CHECK(ssm_initial_state.scalar_type() == weight_type);
         TORCH_CHECK(ssm_initial_state.is_cuda());
         CHECK_SHAPE(ssm_initial_state, batch_size, dim, dstate);
         ssm_initial_state_batch_stride = ssm_initial_state.stride(0);
@@ -575,7 +575,7 @@ selective_scan_bwd(const at::Tensor &u, const at::Tensor &delta,
     uint32_t dssm_initial_state_d_stride = 0;
     uint32_t dssm_initial_state_dstate_stride = 0;
     if (ssm_initial_state_.has_value()) { 
-        dssm_initial_state = torch::zeros_like(ssm_initial_state_.value()); 
+        dssm_initial_state = torch::empty({batch_size, dim, dstate}, u.options().dtype(weight_type));
         dssm_initial_state_batch_stride = dssm_initial_state.stride(0);
         dssm_initial_state_d_stride = dssm_initial_state.stride(1);
         dssm_initial_state_dstate_stride = dssm_initial_state.stride(2);

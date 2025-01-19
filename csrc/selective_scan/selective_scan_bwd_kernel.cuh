@@ -143,6 +143,22 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
     float dD_val = 0;
     float ddelta_bias_val = 0;
 
+    //retep is here
+    weight_t *ssm_initial_state = nullptr, *dssm_initial_state = nullptr;
+    if (params.ssm_initial_state_ptr != nullptr){
+        ssm_initial_state = reinterpret_cast<weight_t *>(params.ssm_initial_state_ptr) + batch_id * params.ssm_initial_state_batch_stride
+            + dim_id * params.ssm_initial_state_d_stride;
+        dssm_initial_state = reinterpret_cast<weight_t *>(params.dssm_initial_state_ptr) + batch_id * params.dssm_initial_state_batch_stride
+            + dim_id * params.dssm_initial_state_d_stride;
+    }
+    weight_t* dlast_state = reinterpret_cast<weight_t *>(params.dlast_state_ptr) + batch_id * params.dlast_state_batch_stride
+                                                    + dim_id  * params.dlast_state_d_stride;
+    int64_t length_val = params.seqlen;
+    if (params.length_ptr != nullptr){
+        int64_t *length_ptr = reinterpret_cast<int64_t *>(params.length_ptr) + batch_id * params.length_batch_stride;
+        length_val = *length_ptr;
+    }
+
     constexpr int kChunkSize = kNThreads * kNItems;
     u += (params.n_chunks - 1) * kChunkSize;
     delta += (params.n_chunks - 1) * kChunkSize;
@@ -261,6 +277,15 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
                         (!kIsVariableC
                          ? (!kIsVariableB ? B_val * C_val : C_val)
                          : (!kIsVariableB ? B_val * C_vals[i] : C_vals[i]));
+                    // retep is here
+                    if (chunk * kChunkSize + threadIdx.x * kNItems + i == length_val - 1)
+                        thread_reverse_data[i].y += dlast_state[state_idx * params.last_state_dstate_stride];
+                }
+                // retep is here
+                weight_t first_A;
+                if(chunk == 0 && threadIdx.x == 0 && ssm_initial_state != nullptr){
+                    first_A = thread_data[0].x;
+                    thread_data[0].y += first_A * ssm_initial_state[state_idx * params.ssm_initial_state_dstate_stride];
                 }
                 __syncthreads();
                 thread_reverse_data[kNItems - 1].x = threadIdx.x == kNThreads - 1
@@ -277,6 +302,10 @@ void selective_scan_bwd_kernel(SSMParamsBwd params) {
                 typename Ktraits::BlockReverseScanT(smem_reverse_scan).InclusiveReverseScan(
                     thread_reverse_data, thread_reverse_data, SSMScanOp<weight_t>(), postfix_op
                 );
+                // retep is here
+                if(chunk == 0 && threadIdx.x == 0 && dssm_initial_state != nullptr)
+                    dssm_initial_state[state_idx * params.dssm_initial_state_dstate_stride] = 
+                                        thread_reverse_data[0].y * first_A;
                 if (threadIdx.x == 0) { smem_running_postfix[state_idx] = postfix_op.running_prefix; }
                 weight_t dA_val = 0, dBC_val = 0;
                 weight_t dB_vals[kNItems], dC_vals[kNItems];
